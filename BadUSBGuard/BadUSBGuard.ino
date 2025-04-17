@@ -1,0 +1,217 @@
+   #include <usbhub.h>
+#include "pgmstrings.h"
+#ifdef dobogusinclude
+#include <spi4teensy3.h>
+#endif
+#include <SPI.h>
+
+#define UIN A1
+#define UOUT A2
+#define DORPER A3
+#define S A4
+#define OE A5
+int uin;
+int uout; 
+bool reded=false;
+String whitelist[][2] = {{"0000", "0000"}, {"046d", "c52f"}};
+String classlist[] = {"00", "08"};
+String idhex[2];
+String classhex;
+bool ided;
+
+USB     Usb;
+void setup()
+{
+  Serial.begin( 115200 );
+  pinMode(UIN, INPUT);
+  pinMode(UOUT, INPUT);
+  pinMode(DORPER, OUTPUT);
+  pinMode(S, OUTPUT);
+  pinMode(OE, OUTPUT);
+  digitalWrite(DORPER,HIGH);
+  digitalWrite(S,HIGH);
+  digitalWrite(OE,LOW);
+#if !defined(__MIPSEL__)
+  while (!Serial); // Wait for serial port to connect - used on Leonardo, Teensy and other boards with built-in USB CDC serial connection
+#endif
+  if (Usb.Init() == -1)
+    Serial.println("OSC did not start.");
+
+  delay( 200 );
+}
+
+uint8_t getdevdescr( uint8_t addr, uint8_t &num_conf );
+
+void PrintDescriptors(uint8_t addr)
+{
+  uint8_t rcode = 0;
+  uint8_t num_conf = 0;
+
+  rcode = getdevdescr( (uint8_t)addr, num_conf );
+  if ( rcode )
+  {
+    print_hex( rcode, 8 );
+  }
+
+  for (int i = 0; i < num_conf; i++)
+  {
+    rcode = getconfdescr( addr, i );                 // get configuration descriptor
+    if ( rcode )
+    {
+      print_hex(rcode, 8);
+    }
+  }
+}
+
+void PrintAllDescriptors(UsbDevice *pdev)
+{
+  PrintDescriptors( pdev->address.devAddress );
+}
+
+void loop()
+{
+  Usb.Task();
+  uin=analogRead(UIN);
+  uout=analogRead(UOUT);
+  for(int i=0;i<10;i++)
+  {
+    uin+=analogRead(UIN);
+    uout+=analogRead(UOUT);
+    delay(10);
+    }
+  //Serial.println(uin-uout);
+  if ((uin-uout) > 15) //Usb.getUsbTaskState() == USB_STATE_RUNNING
+  {
+    if (reded==false)
+    {
+      digitalWrite(S,HIGH);
+      digitalWrite(OE,LOW);
+      ided=true;
+      Usb.Task();
+      Usb.ForEachUsbDevice(&PrintAllDescriptors);
+      if(idhex[0]!=""&&idhex[1]!=""&&classhex!=""){
+      reded=true;
+      for (int i = 0; i < sizeof(classlist)-1; i++)
+      {
+        if(strcmp(classlist[i].c_str(),classhex.c_str())==0)
+        {
+          digitalWrite(S,LOW);
+          digitalWrite(OE,LOW);
+          break;
+        }
+      }
+      if(ided)
+      {
+        for (int i = 0; i < sizeof(whitelist); i++)
+        {
+          if((strcmp(whitelist[i][0].c_str(),idhex[0].c_str())==0)&&(strcmp(whitelist[i][1].c_str(),idhex[1].c_str())==0))
+          {
+            digitalWrite(S,LOW);
+            digitalWrite(OE,LOW);
+            reded=true;
+            break;
+          }
+        }
+      }
+    }}
+  }
+  else
+  {
+    //Serial.println(uin-uout);
+    //delay(2000);
+    asm volatile("jmp 0x00");
+    reded=false;
+    //digitalWrite(DORPER,HIGH);
+    digitalWrite(S,HIGH);
+    digitalWrite(OE,LOW);
+    classhex="";
+    idhex[0]="";
+    idhex[1]="";
+  }
+}
+
+void opened()//Dropped and D-->D2
+{
+  //digitalWrite(DORPER,LOW);
+  digitalWrite(S,LOW);
+  digitalWrite(OE,LOW);
+  delay(250);
+  //digitalWrite(DORPER,HIGH);
+}
+
+uint8_t getdevdescr( uint8_t addr, uint8_t &num_conf )
+{
+  USB_DEVICE_DESCRIPTOR buf;
+  uint8_t rcode;
+  rcode = Usb.getDevDescr( addr, 0, 0x12, ( uint8_t *)&buf );
+  if ( rcode ) {
+    return ( rcode );
+  }
+  idhex[0] = print_hex( buf.idVendor, 16 );
+  Serial.println(idhex[0]);
+  idhex[1] =print_hex( buf.idProduct, 16 );
+  Serial.println(idhex[1]);
+  num_conf = buf.bNumConfigurations;
+  return ( 0 );
+}
+
+uint8_t getconfdescr( uint8_t addr, uint8_t conf )
+{
+  uint8_t buf[ BUFSIZE ];
+  uint8_t* buf_ptr = buf;
+  uint8_t rcode;
+  uint8_t descr_length;
+  uint8_t descr_type;
+  uint16_t total_length;
+  rcode = Usb.getConfDescr( addr, 0, 4, conf, buf );  //get total length
+  LOBYTE( total_length ) = buf[ 2 ];
+  HIBYTE( total_length ) = buf[ 3 ];
+  if ( total_length > 256 ) {   //check if total length is larger than buffer
+    total_length = 256;
+  }
+  rcode = Usb.getConfDescr( addr, 0, total_length, conf, buf ); //get the whole descriptor
+  while ( buf_ptr < buf + total_length ) { //parsing descriptors
+    descr_length = *( buf_ptr );
+    descr_type = *( buf_ptr + 1 );
+    switch ( descr_type ) {
+      case ( USB_DESCRIPTOR_INTERFACE ):
+        printintfdescr( buf_ptr );
+        return ("");
+        break;
+    }//switch( descr_type
+    buf_ptr = ( buf_ptr + descr_length );    //advance buffer pointer
+  }//while( buf_ptr <=...
+  return ( rcode );
+}
+/* prints hex numbers with leading zeroes */
+// copyright, Peter H Anderson, Baltimore, MD, Nov, '07
+// source: http://www.phanderson.com/arduino/arduino_display.html
+String print_hex(int v, int num_places)
+{
+  int mask = 0, n, num_nibbles, digit; 
+  String digits="";
+
+  for (n = 1; n <= num_places; n++) {
+    mask = (mask << 1) | 0x0001;
+  }
+  v = v & mask; // truncate v to specified number of places
+
+  num_nibbles = num_places / 4;
+  if ((num_places % 4) != 0) {
+    ++num_nibbles;
+  }
+  do {
+    digit = ((v >> (num_nibbles - 1) * 4)) & 0x0f;
+    digits+=String(digit,HEX);
+  }
+  while (--num_nibbles);
+  return ( digits );
+}
+/* function to print interface descriptor */
+void printintfdescr( uint8_t* descr_ptr )
+{
+  USB_INTERFACE_DESCRIPTOR* intf_ptr = ( USB_INTERFACE_DESCRIPTOR* )descr_ptr;
+  classhex = print_hex( intf_ptr->bInterfaceClass, 8 );
+  Serial.println(classhex);
+  return;
+}
